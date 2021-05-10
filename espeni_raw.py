@@ -1,12 +1,12 @@
 # readme
 # code to create parse ESPENI dataset from publicly available Elexon and National Grid data
 # to be used once Elexon and National Grid files have been manually downloaded from:
-# www.elexonportal.co.uk/fuelhh
-# https://demandforecast.nationalgrid.com/efs_demand_forecast/faces/DataExplorer
+# www.elexonportal.co.uk/fuelhh (needs Elexon registration to login)
+# https://data.nationalgrideso.com/demand/historic-demand-data
 # elexon_data is saved to elexon_manual folder path on local machine
 # national grid data is saved to national grid folder path on local machine
 # masterlocaltime.csv from https://zenodo.org/record/3887182 needs to be downloaded and saved
-# in 'folderpath' folder
+# in 'out' folder
 
 
 import os.path
@@ -20,18 +20,17 @@ from pandas import DataFrame
 
 start_time = time.time()
 downloaddate = dt.datetime.now().strftime("%Y-%m-%d")
-suffix = 'ELEXM'
 yearstr = time.strftime('%Y')
 open_toggle = 1
 
 # folders
 home_folder = os.getenv('HOME')
-folderpath = f'{home_folder}/PycharmProjects/shared_sandbox/create_espeni_folder_and_files'
-elexon = f'{folderpath}/elexon_manual/elexon_data/'
-ngembedrawraw = f'{folderpath}/ngembed/ngembedrawraw/'
-ngembedrawpar = f'{folderpath}/ngembed/ngembedrawpar/'
-ngembedoutput = f'{folderpath}/ngembed/ngembedoutputrawpar/'
-out = f'{home_folder}/OneDrive - University of Birmingham/elexon_ng_espeni/'
+working_folder = f'{home_folder}/OneDrive - University of Birmingham/elexon_ng_espeni/'  # change to own working folder
+elexon = f'{working_folder}elexon/elexon_download_data/'  # location of raw Elexon files
+ngembed = f'{working_folder}ngembed/'
+ngembedrawraw = f'{ngembed}ngembedrawraw/'  # location of raw national grid files
+ngembedrawpar = f'{ngembed}ngembedrawpar/'  # location of parsed national grid files
+out = f'{working_folder}/'  # location of output files
 
 
 # section to parse elexon data together and add utc and localtime
@@ -53,8 +52,8 @@ dfelexon.sort_values(by=['SDSP_RAW'], ascending=True, inplace=True)
 dfelexon.reset_index(drop=True, inplace=True)
 
 # load masterlocaltime.csv file with datetimes against date and settlement period
-os.chdir(folderpath)
-masterlocaltime = pd.read_csv('masterlocaltime.csv', encoding='Utf-8', dtype={'settlementperiod': str})
+os.chdir(out)
+masterlocaltime = pd.read_csv('masterlocaltime_iso8601.csv', encoding='Utf-8', dtype={'settlementperiod': str})
 localtimedict = dict(zip(masterlocaltime['datesp'], masterlocaltime['localtime']))
 localtimedictutc = dict(zip(masterlocaltime['datesp'], masterlocaltime['utc']))
 dfelexon['localtime'] = dfelexon['SDSP_RAW'].map(localtimedict)
@@ -79,11 +78,15 @@ dfelexonlist = ['SETTLEMENT_DATE',
                 'OCGT',
                 'OTHER',
                 'BIOMASS',
+                'INTELEC',
+                'INTEW',
                 'INTFR',
+                'INTIFA2',
                 'INTIRL',
                 'INTNED',
-                'INTEW',
-                'INTNEM']
+                'INTNEM',
+                'INTNSL']
+
 
 dfelexon['utc'] = pd.to_datetime(dfelexon['utc'])
 dfelexon = dfelexon.set_index('utc', drop=False)
@@ -92,7 +95,7 @@ dfelexon = dfelexon[dfelexonlist]
 
 # renames column names
 nosuffix = ['SETTLEMENT_DATE', 'SETTLEMENT_PERIOD', 'localtime', 'utc', 'ROWFLAG', 'SDSP_RAW']
-
+suffix = 'ELEXM'
 for col in dfelexon.columns:
     if col in nosuffix:
         dfelexon.rename(columns={col: f'{suffix}_{col}'}, inplace=True)
@@ -176,7 +179,7 @@ dfng.reset_index(drop=True, inplace=True)
 
 # load masterlocaltime.csv file with datetimes against date and settlement period
 
-os.chdir(ngembedoutput)
+os.chdir(out)
 dfng[f'{suffix}_localtime'] = dfng[f'{suffix}_SDSP_RAW'].map(localtimedict)
 dfng[f'{suffix}_utc'] = dfng[f'{suffix}_SDSP_RAW'].map(localtimedictutc)
 dfng.insert(3, 'NGEM_ROWFLAG', value=1)
@@ -220,6 +223,7 @@ df['POWER_ELEXM_BIOMASS_POSTCALC_MW'] = \
     np.where(df.index < biomassstartdate, df[oblist].sum(axis=1).mul(1-otherb_ratio),
              df['POWER_ELEXM_BIOMASS_PRECALC_MW']).round(0)
 
+# list to sum to ESPENI
 espenilist = ['POWER_ELEXM_CCGT_MW',
               'POWER_ELEXM_OIL_MW',
               'POWER_ELEXM_COAL_MW',
@@ -230,17 +234,18 @@ espenilist = ['POWER_ELEXM_CCGT_MW',
               'POWER_ELEXM_OCGT_MW',
               'POWER_ELEXM_OTHER_POSTCALC_MW',
               'POWER_ELEXM_BIOMASS_POSTCALC_MW',
-              'POWER_NGEM_BRITNED_FLOW_MW',
+              'POWER_NGEM_BRITNED_FLOW_MW',  # added on 2021-03-02, INTNED_FLOW changed to BRITNED_FLOW
               'POWER_NGEM_EAST_WEST_FLOW_MW',
-              'POWER_NGEM_FRENCH_FLOW_MW',
               'POWER_NGEM_MOYLE_FLOW_MW',
               'POWER_NGEM_NEMO_FLOW_MW',
+              'POWER_NGEM_IFA_FLOW_MW',  # added on 2021-03-02, FRENCH_FLOW changed to IFA_FLOW
+              'POWER_NGEM_IFA2_FLOW_MW',  # added on 2021-03-02, IFA2 data started
               'POWER_NGEM_EMBEDDED_SOLAR_GENERATION_MW',
               'POWER_NGEM_EMBEDDED_WIND_GENERATION_MW']
 
 df['POWER_ESPENI_MW'] = df[espenilist].sum(axis=1)
 
-natureespenilist = ['ELEXM_SETTLEMENT_DATE',
+espenifileoutput = ['ELEXM_SETTLEMENT_DATE',
                     'ELEXM_SETTLEMENT_PERIOD',
                     'ELEXM_utc',
                     'ELEXM_localtime',
@@ -259,13 +264,15 @@ natureespenilist = ['ELEXM_SETTLEMENT_DATE',
                     'POWER_ELEXM_BIOMASS_POSTCALC_MW',
                     'POWER_NGEM_EMBEDDED_SOLAR_GENERATION_MW',
                     'POWER_NGEM_EMBEDDED_WIND_GENERATION_MW',
-                    'POWER_NGEM_BRITNED_FLOW_MW',
+                    'POWER_NGEM_BRITNED_FLOW_MW',  # added on 2021-03-02, INTNED_FLOW changed to BRITNED_FLOW
                     'POWER_NGEM_EAST_WEST_FLOW_MW',
-                    'POWER_NGEM_FRENCH_FLOW_MW',
                     'POWER_NGEM_MOYLE_FLOW_MW',
-                    'POWER_NGEM_NEMO_FLOW_MW']
+                    'POWER_NGEM_NEMO_FLOW_MW',
+                    'POWER_NGEM_IFA_FLOW_MW',  # added on 2021-03-02, FRENCH_FLOW changed to IFA_FLOW
+                    'POWER_NGEM_IFA2_FLOW_MW',  # added on 2021-03-02, IFA2 data started
+                    ]
 
-df = df[natureespenilist]
-os.chdir(folderpath)
-df.to_csv('espeni_raw.csv', encoding='Utf-8', index=False)
+df = df[espenifileoutput]
+os.chdir(out)
+# df.to_csv('espeni_raw.csv', encoding='Utf-8', index=False)
 print("time elapsed: {:.2f}s".format(time.time() - start_time))
