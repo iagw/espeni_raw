@@ -5,18 +5,18 @@
 # https://data.nationalgrideso.com/demand/historic-demand-data
 # elexon_data is saved to elexon_manual folder path on local machine
 # national grid data is saved to national grid folder path on local machine
-# masterlocaltime.csv from https://zenodo.org/record/3887182 needs to be downloaded and saved
-# in 'out' folder
-
+# masterlocaltime_iso8601.parquet from github is automatically downloaded to map settlement day and periods
+# to utc and localtime
 
 import os.path
-import numpy as np
 import datetime as dt
+import numpy as np
 import pandas as pd
 import glob
 import time
 
-from pandas import DataFrame
+pd.set_option('display.max_rows', None)
+pd.set_option('display.max_columns', None)
 
 start_time = time.time()
 downloaddate = dt.datetime.now().strftime("%Y-%m-%d")
@@ -51,9 +51,13 @@ dfelexon.duplicated(subset=['SDSP_RAW'], keep='last').sum()
 dfelexon.sort_values(by=['SDSP_RAW'], ascending=True, inplace=True)
 dfelexon.reset_index(drop=True, inplace=True)
 
+# update to read masterdatetimefile in from github rather than local, it is a parquet file rather than a csv
+githubMasterDatetimeFile = 'https://raw.githubusercontent.com/iagw/masterdatetime/master/masterlocaltime_iso8601.parquet'
+masterlocaltime = pd.read_parquet(githubMasterDatetimeFile)
+
 # load masterlocaltime.csv file with datetimes against date and settlement period
 os.chdir(out)
-masterlocaltime = pd.read_csv('masterlocaltime_iso8601.csv', encoding='Utf-8', dtype={'settlementperiod': str})
+# masterlocaltime = pd.read_csv('masterlocaltime_iso8601.csv', encoding='Utf-8', dtype={'settlementperiod': str})
 localtimedict = dict(zip(masterlocaltime['datesp'], masterlocaltime['localtime']))
 localtimedictutc = dict(zip(masterlocaltime['datesp'], masterlocaltime['utc']))
 dfelexon['localtime'] = dfelexon['SDSP_RAW'].map(localtimedict)
@@ -87,20 +91,16 @@ dfelexonlist = ['SETTLEMENT_DATE',
                 'INTNEM',
                 'INTNSL']
 
-
-dfelexon['utc'] = pd.to_datetime(dfelexon['utc'])
-dfelexon = dfelexon.set_index('utc', drop=False)
-
 dfelexon = dfelexon[dfelexonlist]
 
 # renames column names
 nosuffix = ['SETTLEMENT_DATE', 'SETTLEMENT_PERIOD', 'localtime', 'utc', 'ROWFLAG', 'SDSP_RAW']
-suffix = 'ELEXM'
+prefix = 'ELEXM'
 for col in dfelexon.columns:
     if col in nosuffix:
-        dfelexon.rename(columns={col: f'{suffix}_{col}'}, inplace=True)
+        dfelexon.rename(columns={col: f'{prefix}_{col}'}, inplace=True)
     else:
-        dfelexon.rename(columns={col: f'POWER_{suffix}_{col}_MW'}, inplace=True)
+        dfelexon.rename(columns={col: f'POWER_{prefix}_{col}_MW'}, inplace=True)
 
 
 # section to parse national grid data together and add utc and localtime
@@ -149,39 +149,36 @@ for fname in csvs_to_parse:
 
     # next line makes a list? of all columns that are NOT in the list of 'SETTLEMENT_DATE' etc.
     nosuffix = ['SETTLEMENT_DATE', 'SETTLEMENT_PERIOD', 'FORECAST_ACTUAL_INDICATOR', 'SDSP_RAW']
+    prefix = 'NGEM'
     for col in df.columns:
         if col in nosuffix:
-            df.rename(columns={col: f'{suffix}_{col}'}, inplace=True)
+            df.rename(columns={col: f'{prefix}_{col}'}, inplace=True)
         else:
-            df.rename(columns={col: f'POWER_{suffix}_{col}_MW'}, inplace=True)
+            df.rename(columns={col: f'POWER_{prefix}_{col}_MW'}, inplace=True)
 
     os.chdir(ngembedrawpar)
     fname = fname.split('_rawraw.csv')[0] + '_rawpar.csv'
     df.to_csv(fname, encoding='Utf-8', index=False)
 
 
-#  loop chooses files in a folder who's names contain a particular string
+#  loop chooses files in a folder where the filename contains a particular string
 #  and appends all of these together
 os.chdir(ngembedrawpar)
-suffix = 'NGEM'
+prefix = 'NGEM'
 dfng = pd.DataFrame([])
 for counter, file in enumerate(glob.glob('*_rawpar.csv')):
     namedf = pd.read_csv(file, skiprows=0, encoding='utf-8')
     dfng = dfng.append(namedf, sort=True)
+# dfng[f'{prefix}_SETTLEMENT_PERIOD'] = dfng[f'{prefix}_SETTLEMENT_PERIOD'].astype(str).str.zfill(2)
 
-dfng[f'{suffix}_SETTLEMENT_PERIOD'] = dfng[f'{suffix}_SETTLEMENT_PERIOD'].astype(str).str.zfill(2)
-
-dfng.sort_values([f'{suffix}_SDSP_RAW'], ascending=[True], inplace=True)
-dfng.drop_duplicates(subset=[f'{suffix}_SDSP_RAW'], keep='last', inplace=True)
-
+dfng.sort_values([f'{prefix}_SDSP_RAW'], ascending=[True], inplace=True)
+dfng.drop_duplicates(subset=[f'{prefix}_SDSP_RAW'], keep='last', inplace=True)
 dfng.reset_index(drop=True, inplace=True)
 
 
-# load masterlocaltime.csv file with datetimes against date and settlement period
-
 os.chdir(out)
-dfng[f'{suffix}_localtime'] = dfng[f'{suffix}_SDSP_RAW'].map(localtimedict)
-dfng[f'{suffix}_utc'] = dfng[f'{suffix}_SDSP_RAW'].map(localtimedictutc)
+dfng[f'{prefix}_localtime'] = dfng[f'{prefix}_SDSP_RAW'].map(localtimedict)
+dfng[f'{prefix}_utc'] = dfng[f'{prefix}_SDSP_RAW'].map(localtimedictutc)
 dfng.insert(3, 'NGEM_ROWFLAG', value=1)
 
 df = pd.merge(dfelexon, dfng, how='left', left_on=['ELEXM_SDSP_RAW'], right_on=['NGEM_SDSP_RAW'])
@@ -189,23 +186,10 @@ biomasslist = {'POWER_ELEXM_BIOMASS_MW': 'POWER_ELEXM_BIOMASS_PRECALC_MW',
                'POWER_ELEXM_OTHER_MW': 'POWER_ELEXM_OTHER_PRECALC_MW'}
 df = df.rename(columns=biomasslist)
 
-mask = df['ELEXM_utc'].astype(str).str.contains('/', regex=True)
-df.loc[mask, 'ELEXM_utc'] = pd.to_datetime(df.loc[mask, 'ELEXM_utc'],
-                                           format='%d/%m/%Y %H:%M').dt.strftime('%Y-%m-%d %H:%M')
-df['ELEXM_utc'] = pd.to_datetime(df['ELEXM_utc'], utc=True, format='%Y-%m-%d %H:%M')
+df['ELEXM_utc'] = pd.to_datetime(df['ELEXM_utc'], utc=True)
+df['ELEXM_localtime'] = df['ELEXM_utc'].dt.tz_convert('Europe/London')
 
-mask = df['ELEXM_SETTLEMENT_DATE'].astype(str).str.contains('/', regex=True)
-df.loc[mask, 'ELEXM_SETTLEMENT_DATE'] = pd.to_datetime(df.loc[mask, 'ELEXM_SETTLEMENT_DATE'],
-                                                       format='%d/%m/%Y').dt.strftime('%Y-%m-%d')
-df['ELEXM_SETTLEMENT_DATE'] = pd.to_datetime(df['ELEXM_SETTLEMENT_DATE'], utc=True,
-                                             format='%Y-%m-%d').dt.strftime('%Y-%m-%d')
-# df['ELEXM_SETTLEMENT_DATE'] = df['ELEXM_SETTLEMENT_DATE'].dt.strftime('%Y-%m-%d')
-
-mask = df['ELEXM_localtime'].astype(str).str.contains('/', regex=True)
-df.loc[mask, 'ELEXM_localtime'] = pd.to_datetime(df.loc[mask, 'ELEXM_localtime'],
-                                                 format='%d/%m/%Y %H:%M').dt.strftime('%Y-%m-%d %H:%M')
-df['ELEXM_localtime'] = pd.to_datetime(df['ELEXM_localtime'], utc=True, format='%Y-%m-%d %H:%M')
-df: DataFrame = df.set_index('ELEXM_utc', drop=False)
+df = df.set_index('ELEXM_utc', drop=False)
 
 # elexonstartdate = '2008-11-06 00:00:00'
 biomassstartdate = '2017-11-01 20:00:00+00:00'
@@ -274,5 +258,5 @@ espenifileoutput = ['ELEXM_SETTLEMENT_DATE',
 
 df = df[espenifileoutput]
 os.chdir(out)
-# df.to_csv('espeni_raw.csv', encoding='Utf-8', index=False)
+df.to_csv('espeni_rawa.csv', encoding='Utf-8', index=False)
 print("time elapsed: {:.2f}s".format(time.time() - start_time))
